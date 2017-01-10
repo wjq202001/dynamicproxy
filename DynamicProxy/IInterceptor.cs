@@ -6,9 +6,8 @@ using System.Threading.Tasks;
 
 namespace Gogo.DynamicProxy
 {
-    public interface IMyInterface
+    public interface IInterceptor
     {
-        string Name { get; set; }
-        string Hello(string name);
+        void Intercept(IInvocation invocation);
     }
 }

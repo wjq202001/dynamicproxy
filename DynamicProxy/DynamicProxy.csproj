@@ -41,7 +41,9 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="IIntercept.cs" />
+    <Compile Include="IInterceptor.cs" />
+    <Compile Include="IInvocation.cs" />
+    <Compile Include="MyClassProxy.cs" />
     <Compile Include="IMyInterface.cs" />
     <Compile Include="MyClass.cs" />
     <Compile Include="Program.cs" />

@@ -76,6 +76,127 @@ namespace Gogo.DynamicProxy
 
             return tBuilder.CreateType();
         }
+
+        private static Type DynamicTypeGenerater<TInterface,TImpl>(IInterceptor intercepter)
+        {
+            Type interfaceType = typeof(TInterface);
+            Type implType = typeof(TImpl);
+
+            MethodInfo[] interfaceMethods = interfaceType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
+            PropertyInfo[] interfaceProperties = interfaceType.GetProperties(BindingFlags.Instance|BindingFlags.Public);
+
+            MethodInfo[] ImplMethods = implType.GetMethods(BindingFlags.Public|BindingFlags.Instance);
+
+            AssemblyName abName = new System.Reflection.AssemblyName("_AssemblyName");
+            AssemblyBuilder abBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(abName, AssemblyBuilderAccess.RunAndSave);
+
+            ModuleBuilder mdBuilder = abBuilder.DefineDynamicModule(abName.Name, abName.Name + ".dll");
+
+            TypeBuilder typeBuilder = mdBuilder.DefineType(
+                "_dynamictype",
+                TypeAttributes.Class | TypeAttributes.Public,
+                null,
+                new Type[]{interfaceType});
+            FieldBuilder fdBuilder = typeBuilder.DefineField("_wappedImpl", implType, FieldAttributes.Private);
+            BuildProxyConstructor(implType, typeBuilder,fdBuilder);
+
+            foreach(var property in interfaceProperties)
+            {
+                MethodInfo setM = GetSetPropertyMethod(property, ImplMethods);
+                MethodInfo getM = GetGetPropertyMethod(property, ImplMethods);
+                GenerateProperty(typeBuilder, fdBuilder, property, setM, getM);
+            }
+
+            foreach(var method in interfaceMethods)
+            {
+
+            }
+        }
+        private static void GenerateProperty(TypeBuilder typeBuilder,FieldBuilder fdBuilder,PropertyInfo property,MethodInfo setM,MethodInfo getM)
+        {
+            string propertyName = property.Name;
+            Type propertyType = property.PropertyType;
+            PropertyBuilder pBuilder = typeBuilder.DefineProperty(propertyName,
+                PropertyAttributes.HasDefault,
+                propertyType,
+                null);
+            MethodAttributes mAttributes = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.NewSlot | MethodAttributes.HideBySig | MethodAttributes.Virtual|MethodAttributes.Final;
+            MethodBuilder setBuilder = typeBuilder.DefineMethod("set_" + propertyName, mAttributes, propertyType,Type.EmptyTypes);
+            var setIL = setBuilder.GetILGenerator();
+            if (setM == null)
+            {
+                setIL.Emit(OpCodes.Newobj, typeof(NotImplementedException).GetConstructor(Type.EmptyTypes));
+                setIL.Emit(OpCodes.Throw);
+            }
+            else
+            {
+                setIL.Emit(OpCodes.Ldarg_0);
+                setIL.Emit(OpCodes.Ldfld, fdBuilder);
+                setIL.Emit(OpCodes.Ldarg_1);
+                setIL.Emit(OpCodes.Callvirt, setM);
+                setIL.Emit(OpCodes.Ret);
+            }
+            
+            MethodBuilder getBuilder = typeBuilder.DefineMethod("get_"+propertyName,mAttributes,propertyType,Type.EmptyTypes);
+            var getIL = getBuilder.GetILGenerator();
+            if(getM==null)
+            {
+                getIL.Emit(OpCodes.Newobj, typeof(NotImplementedException).GetConstructor(Type.EmptyTypes));
+                getIL.Emit(OpCodes.Throw);
+            }
+            else
+            {
+                getIL.Emit(OpCodes.Ldarg_0);
+                getIL.Emit(OpCodes.Ldfld, fdBuilder);
+                getIL.Emit(OpCodes.Ldarg_1);
+                getIL.Emit(OpCodes.Callvirt, getM);
+                getIL.Emit(OpCodes.Ret);
+            }
+            pBuilder.SetGetMethod(getBuilder);
+            pBuilder.SetSetMethod(setBuilder);
+        }
+
+
+        private static MethodInfo GetSetPropertyMethod(PropertyInfo pInfo,MethodInfo[] methods)
+        {
+            if(methods!=null)
+            {
+                foreach(var method in methods)
+                {
+                    if(method.Name=="set_"+pInfo.Name)
+                    {
+                        return method;
+                    }
+                }
+            }
+            return null;
+        }
+        private static MethodInfo GetGetPropertyMethod(PropertyInfo pInfo,MethodInfo[] methods)
+        {
+            if (methods != null)
+            {
+                foreach (var method in methods)
+                {
+                    if (method.Name == "get_" + pInfo.Name)
+                    {
+                        return method;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static void BuildProxyConstructor(Type implType, TypeBuilder typeBuilder, FieldBuilder fdBuilder)
+        {
+            ConstructorBuilder ctorBuilder = typeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { implType });
+            var ctorIL = ctorBuilder.GetILGenerator();
+            ctorIL.Emit(OpCodes.Ldarg_0);
+            ctorIL.Emit(OpCodes.Call, typeof(object).GetConstructor(Type.EmptyTypes));
+            ctorIL.Emit(OpCodes.Ldarg_0);
+            ctorIL.Emit(OpCodes.Ldarg_1);
+            ctorIL.Emit(OpCodes.Stfld, fdBuilder);
+            ctorIL.Emit(OpCodes.Ret);
+        }
         private static void CreateMethod(TypeBuilder tb, FieldBuilder fbInstance, MethodInfo mi, MethodInfo instanceMi)
         {
             List<Type> paramTyleList = new List<Type>();
@@ -135,6 +256,7 @@ namespace Gogo.DynamicProxy
 
                 il.Emit(OpCodes.Callvirt, instanceMi);
                 il.Emit(OpCodes.Ret);
+                
             }
         }
 
