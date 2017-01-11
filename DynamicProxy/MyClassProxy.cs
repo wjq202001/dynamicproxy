@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -10,21 +11,22 @@ namespace Gogo.DynamicProxy
     {
         private MyClass _myClass;
         private IInterceptor _interceptor;
-        private IInvocation _invocation;
+        //private IInvocation _invocation;
         public MyClassProxy(MyClass myclass, IInterceptor interceptor)
         {
             _myClass = myclass;
             _interceptor = interceptor;
         }
 
-        public string Hello(string name)
+        public string Hello()
         {
-            _invocation = new Invocation();
-            _invocation.Target = _myClass;
-            _invocation.TargetMethod = typeof(MyClass).GetMethod("Hello");
-            _invocation.TargetArgs = new object[] { name };
+            var target = new MyClass("n");
+            var hello = target.GetType().GetMethod("Hello");
+            var _invocation = new Invocation(new object());
+            _invocation.Target = target;
+            _invocation.TargetMethod = hello;
+            _invocation.TargetArgs = hello.GetParameters();
             _interceptor.Intercept(_invocation);
-
             return _invocation.ReturnValue as string;
         }
     }
@@ -40,6 +42,11 @@ namespace Gogo.DynamicProxy
 
     public class Invocation : IInvocation
     {
+
+        public Invocation(Object obj)
+        {
+            this.Target = obj;
+        }
 
         public object ReturnValue
         {

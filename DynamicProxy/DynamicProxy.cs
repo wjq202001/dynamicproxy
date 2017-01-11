@@ -9,6 +9,13 @@ using System.Reflection.Emit;
 
 namespace Gogo.DynamicProxy
 {
+    //public class Interceptor:IInterceptor
+    //{
+    //    public void Intercept(IInvocation invocation)
+    //    {
+    //        invocation.Proceed();
+    //    }
+    //}
     public class DynamicProxy
     {
         public static TInterface Create<TInterface, TImpl>(TImpl imp)
@@ -18,6 +25,17 @@ namespace Gogo.DynamicProxy
             Type type = DynimicTypeGenerater<TInterface, TImpl>();
             return Activator.CreateInstance(type, imp) as TInterface;
         }
+
+        public static TInterface Create<TInterface, TImpl>(TImpl imp,IInterceptor interceptor)
+            where TInterface : class
+            where TImpl : class
+        {
+           // var c = typeof(Invocation).GetConstructors();
+            Type type = DynamicTypeGenerater<TInterface, TImpl>();
+            List<object> args = GetConstructorArguments(imp,  interceptor );
+            return Activator.CreateInstance(type, imp,interceptor) as TInterface;
+        }
+
         private static Type DynimicTypeGenerater<TInterface, TImpl>()
             where TInterface : class
             where TImpl : class
@@ -37,7 +55,7 @@ namespace Gogo.DynamicProxy
                 if (!item.IsSpecialName)
                     methodList.Add(item);
             }
-
+            
             MethodInfo[] implMethods = typeImpl.GetMethods(BindingFlags.Public | BindingFlags.Instance);
 
             AssemblyName abName = new AssemblyName("DynamicTypes");
@@ -77,42 +95,170 @@ namespace Gogo.DynamicProxy
             return tBuilder.CreateType();
         }
 
-        private static Type DynamicTypeGenerater<TInterface,TImpl>(IInterceptor intercepter)
+        protected static List<object> GetConstructorArguments(object target, IInterceptor interceptors)
         {
+            List<object> list = new List<object>()
+			{
+                target,
+				interceptors
+				
+			};
+
+            return list;
+        }
+
+        private static Type DynamicTypeGenerater<TInterface, TImpl>()
+        {
+                   
+
             Type interfaceType = typeof(TInterface);
             Type implType = typeof(TImpl);
 
+            var c = typeof(Invocation).GetConstructors();
             MethodInfo[] interfaceMethods = interfaceType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
-            PropertyInfo[] interfaceProperties = interfaceType.GetProperties(BindingFlags.Instance|BindingFlags.Public);
+            PropertyInfo[] interfaceProperties = interfaceType.GetProperties(BindingFlags.Instance | BindingFlags.Public);
 
-            MethodInfo[] ImplMethods = implType.GetMethods(BindingFlags.Public|BindingFlags.Instance);
+            MethodInfo[] ImplMethods = implType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
 
             AssemblyName abName = new System.Reflection.AssemblyName("_AssemblyName");
             AssemblyBuilder abBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(abName, AssemblyBuilderAccess.RunAndSave);
 
             ModuleBuilder mdBuilder = abBuilder.DefineDynamicModule(abName.Name, abName.Name + ".dll");
 
+
             TypeBuilder typeBuilder = mdBuilder.DefineType(
                 "_dynamictype",
                 TypeAttributes.Class | TypeAttributes.Public,
                 null,
-                new Type[]{interfaceType});
+                new Type[] { interfaceType });
             FieldBuilder fdBuilder = typeBuilder.DefineField("_wappedImpl", implType, FieldAttributes.Private);
-            BuildProxyConstructor(implType, typeBuilder,fdBuilder);
+            var interceptor = typeBuilder.DefineField("_interceptor", typeof(Interceptor), FieldAttributes.Private);
+            BuildProxyConstructor(implType, typeBuilder, fdBuilder,interceptor);
 
-            foreach(var property in interfaceProperties)
+            foreach (var property in interfaceProperties)
             {
                 MethodInfo setM = GetSetPropertyMethod(property, ImplMethods);
                 MethodInfo getM = GetGetPropertyMethod(property, ImplMethods);
                 GenerateProperty(typeBuilder, fdBuilder, property, setM, getM);
             }
 
-            foreach(var method in interfaceMethods)
+            foreach (var item in interfaceMethods)
             {
-
+                MethodInfo mInfo = GetMethod(item, ImplMethods);
+                CreateMethod1(typeBuilder, item, interceptor,fdBuilder);
             }
+
+            return typeBuilder.CreateType();
         }
-        private static void GenerateProperty(TypeBuilder typeBuilder,FieldBuilder fdBuilder,PropertyInfo property,MethodInfo setM,MethodInfo getM)
+
+
+
+        private static void CreateMethod1(TypeBuilder typeBuilder, MethodInfo mInfo, FieldBuilder fdInterceptor,FieldBuilder fdInstance)
+        {
+            Type invocationType = typeof(Invocation);
+            var mInstance = typeof(Interceptor).GetMethod("Intercept");
+            var targetProperty = invocationType.GetProperty("Target");
+            var setTargetMethod = invocationType.GetMethod("set_TargetMethod");
+            
+            List<Type> parameterTypes = mInfo.GetParameters().Select(p => p.ParameterType).ToList();
+            MethodAttributes mAttributes = MethodAttributes.Public | MethodAttributes.NewSlot | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Final;
+            MethodBuilder mBuilder = typeBuilder.DefineMethod(mInfo.Name, mAttributes, mInfo.ReturnType, parameterTypes.ToArray());
+            var mBuilderIL = mBuilder.GetILGenerator();
+
+            {
+                LocalBuilder invo = mBuilderIL.DeclareLocal(invocationType);
+                //LocalBuilder invo2 = mBuilderIL.DeclareLocal(typeof(MethodInfo));
+
+                mBuilderIL.Emit(OpCodes.Ldarg_0);
+                mBuilderIL.Emit(OpCodes.Ldfld, fdInstance);                
+                mBuilderIL.Emit(OpCodes.Newobj, invocationType.GetConstructor(new Type[] { fdInstance.FieldType }));
+
+                mBuilderIL.Emit(OpCodes.Stloc_0);
+                
+
+                //mBuilderIL.Emit(OpCodes.Ret);
+                //mBuilderIL.Emit(OpCodes.Stloc_0);
+                mBuilderIL.Emit(OpCodes.Ldarg_0);
+                mBuilderIL.Emit(OpCodes.Ldfld, fdInterceptor);
+                mBuilderIL.Emit(OpCodes.Ldloc_0);
+
+                mBuilderIL.Emit(OpCodes.Call, mInstance);
+                mBuilderIL.Emit(OpCodes.Ldstr, "");//确保有返回值
+                mBuilderIL.Emit(OpCodes.Ret);
+            }
+
+        }
+
+        private static void CreateMethod(TypeBuilder typeBuilder, MethodInfo mInfo, FieldBuilder fdInstance, MethodInfo mInstance)
+        {
+            //IInvocation invocation = new Invocation();
+            //invocation.Target = fdInstance;
+            //invocation.TargetMethod = mInstance;
+            //interceptor.Intercept(invocation);
+
+            List<Type> parameterTypes = mInfo.GetParameters().Select(p => p.ParameterType).ToList();
+            MethodAttributes mAttributes = MethodAttributes.Public | MethodAttributes.NewSlot | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Final;
+            MethodBuilder mBuilder = typeBuilder.DefineMethod(mInfo.Name, mAttributes, mInfo.ReturnType, parameterTypes.ToArray());
+            var mBuilderIL = mBuilder.GetILGenerator();
+
+            if (mInstance == null)
+            {
+                mBuilderIL.Emit(OpCodes.Newobj, typeof(NotImplementedException).GetConstructor(Type.EmptyTypes));
+                mBuilderIL.Emit(OpCodes.Throw);
+            }
+            else
+            {
+                mBuilderIL.Emit(OpCodes.Ldarg_0);
+                mBuilderIL.Emit(OpCodes.Ldfld, fdInstance);
+                switch (parameterTypes.Count)
+                {
+                    case 0:
+                        break;
+                    case 1:
+                        mBuilderIL.Emit(OpCodes.Ldarg_1);
+                        break;
+                    case 2:
+                        mBuilderIL.Emit(OpCodes.Ldarg_1);
+                        mBuilderIL.Emit(OpCodes.Ldarg_2);
+                        break;
+                    case 3:
+                        mBuilderIL.Emit(OpCodes.Ldarg_1);
+                        mBuilderIL.Emit(OpCodes.Ldarg_2);
+                        mBuilderIL.Emit(OpCodes.Ldarg_3);
+                        break;
+                    default:
+                        {
+                            int pCount = Math.Min(parameterTypes.Count, 127);
+                            for (int i = 4; i <= pCount; i++)
+                            {
+                                mBuilderIL.Emit(OpCodes.Ldarg_S, i);
+                            }
+                            for (int i = 128; i <= parameterTypes.Count; i++)
+                            {
+                                mBuilderIL.Emit(OpCodes.Ldarg, i);
+                            }
+                            break;
+                        }
+                }
+                mBuilderIL.Emit(OpCodes.Callvirt, mInstance);
+                mBuilderIL.Emit(OpCodes.Ret);
+            }
+
+            
+
+        }
+
+        private static MethodInfo GetMethod(MethodInfo item, MethodInfo[] implMethods)
+        {
+            foreach (var method in implMethods)
+            {
+                if (item.Name == method.Name
+                    && !item.IsSpecialName)
+                    return method;
+            }
+            return null;
+        }
+        private static void GenerateProperty(TypeBuilder typeBuilder, FieldBuilder fdBuilder, PropertyInfo property, MethodInfo setM, MethodInfo getM)
         {
             string propertyName = property.Name;
             Type propertyType = property.PropertyType;
@@ -120,8 +266,8 @@ namespace Gogo.DynamicProxy
                 PropertyAttributes.HasDefault,
                 propertyType,
                 null);
-            MethodAttributes mAttributes = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.NewSlot | MethodAttributes.HideBySig | MethodAttributes.Virtual|MethodAttributes.Final;
-            MethodBuilder setBuilder = typeBuilder.DefineMethod("set_" + propertyName, mAttributes, propertyType,Type.EmptyTypes);
+            MethodAttributes mAttributes = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.NewSlot | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Final;
+            MethodBuilder setBuilder = typeBuilder.DefineMethod("set_" + propertyName, mAttributes, propertyType, new Type[]{ propertyType});
             var setIL = setBuilder.GetILGenerator();
             if (setM == null)
             {
@@ -136,10 +282,10 @@ namespace Gogo.DynamicProxy
                 setIL.Emit(OpCodes.Callvirt, setM);
                 setIL.Emit(OpCodes.Ret);
             }
-            
-            MethodBuilder getBuilder = typeBuilder.DefineMethod("get_"+propertyName,mAttributes,propertyType,Type.EmptyTypes);
+
+            MethodBuilder getBuilder = typeBuilder.DefineMethod("get_" + propertyName, mAttributes, propertyType, Type.EmptyTypes);
             var getIL = getBuilder.GetILGenerator();
-            if(getM==null)
+            if (getM == null)
             {
                 getIL.Emit(OpCodes.Newobj, typeof(NotImplementedException).GetConstructor(Type.EmptyTypes));
                 getIL.Emit(OpCodes.Throw);
@@ -148,7 +294,6 @@ namespace Gogo.DynamicProxy
             {
                 getIL.Emit(OpCodes.Ldarg_0);
                 getIL.Emit(OpCodes.Ldfld, fdBuilder);
-                getIL.Emit(OpCodes.Ldarg_1);
                 getIL.Emit(OpCodes.Callvirt, getM);
                 getIL.Emit(OpCodes.Ret);
             }
@@ -157,13 +302,13 @@ namespace Gogo.DynamicProxy
         }
 
 
-        private static MethodInfo GetSetPropertyMethod(PropertyInfo pInfo,MethodInfo[] methods)
+        private static MethodInfo GetSetPropertyMethod(PropertyInfo pInfo, MethodInfo[] methods)
         {
-            if(methods!=null)
+            if (methods != null)
             {
-                foreach(var method in methods)
+                foreach (var method in methods)
                 {
-                    if(method.Name=="set_"+pInfo.Name)
+                    if (method.Name == "set_" + pInfo.Name)
                     {
                         return method;
                     }
@@ -171,7 +316,7 @@ namespace Gogo.DynamicProxy
             }
             return null;
         }
-        private static MethodInfo GetGetPropertyMethod(PropertyInfo pInfo,MethodInfo[] methods)
+        private static MethodInfo GetGetPropertyMethod(PropertyInfo pInfo, MethodInfo[] methods)
         {
             if (methods != null)
             {
@@ -186,15 +331,20 @@ namespace Gogo.DynamicProxy
             return null;
         }
 
-        private static void BuildProxyConstructor(Type implType, TypeBuilder typeBuilder, FieldBuilder fdBuilder)
+        private static void BuildProxyConstructor(Type implType, TypeBuilder typeBuilder, FieldBuilder fdBuilder,FieldBuilder fdBuilderForInterceptor)
         {
-            ConstructorBuilder ctorBuilder = typeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { implType });
+            
+
+            ConstructorBuilder ctorBuilder = typeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { implType,typeof(IInterceptor) });
             var ctorIL = ctorBuilder.GetILGenerator();
             ctorIL.Emit(OpCodes.Ldarg_0);
             ctorIL.Emit(OpCodes.Call, typeof(object).GetConstructor(Type.EmptyTypes));
             ctorIL.Emit(OpCodes.Ldarg_0);
-            ctorIL.Emit(OpCodes.Ldarg_1);
+            ctorIL.Emit(OpCodes.Ldarg_1);            
             ctorIL.Emit(OpCodes.Stfld, fdBuilder);
+            ctorIL.Emit(OpCodes.Ldarg_0);
+            ctorIL.Emit(OpCodes.Ldarg_2);
+            ctorIL.Emit(OpCodes.Stfld, fdBuilderForInterceptor);
             ctorIL.Emit(OpCodes.Ret);
         }
         private static void CreateMethod(TypeBuilder tb, FieldBuilder fbInstance, MethodInfo mi, MethodInfo instanceMi)
@@ -256,7 +406,7 @@ namespace Gogo.DynamicProxy
 
                 il.Emit(OpCodes.Callvirt, instanceMi);
                 il.Emit(OpCodes.Ret);
-                
+
             }
         }
 
